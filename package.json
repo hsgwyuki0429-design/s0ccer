@@ -1,0 +1,20 @@
+{
+  "name": "s0ccer",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @s0ccer/client",
+    "build": "npm run build -w @s0ccer/client",
+    "preview": "npm run preview -w @s0ccer/client",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test \"packages/shared/src/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^5.7.2"
+  }
+}

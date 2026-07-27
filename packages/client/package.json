@@ -1,0 +1,17 @@
+{
+  "name": "@s0ccer/client",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@s0ccer/shared": "*"
+  },
+  "devDependencies": {
+    "vite": "^6.0.7"
+  }
+}
