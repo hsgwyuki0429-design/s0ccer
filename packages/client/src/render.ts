@@ -255,10 +255,12 @@ export class Renderer {
   /** 狙いとパワーの可視化。「同じ操作 = 同じ球」を目で確認できるようにする。 */
   private drawAimLine(p: PlayerState, ball: BallState, aimDir: { x: number; y: number }): void {
     const ctx = this.ctx;
-    const controlling = hasControl(p, ball);
-    const charging = p.charge > 0;
-    if (!controlling && !charging) return;
+    // コントロール圏外ではキックが成立しない。そこで線を出すと「蹴れる」と
+    // 誤解させるので、触れているときだけ描く。チャージ中でも例外にしない。
+    if (!hasControl(p, ball)) return;
     if (aimDir.x === 0 && aimDir.y === 0) return;
+
+    const charging = p.charge > 0;
 
     const t = Math.min(1, p.charge / C.CHARGE_TIME_MAX);
     const speed = C.KICK_SPEED_MIN + (C.KICK_SPEED_MAX - C.KICK_SPEED_MIN) * t;
