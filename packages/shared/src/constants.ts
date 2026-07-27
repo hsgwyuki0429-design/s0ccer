@@ -86,5 +86,14 @@ export const DRIBBLE_MIN_SPEED = 0.4;
 export const CHARGE_TIME_MAX = 0.6;
 export const KICK_SPEED_MIN = 9;
 export const KICK_SPEED_MAX = 28;
+
+/**
+ * チャージ中の減速率。フルチャージ時に最大速度がこの割合だけ落ちる。
+ *
+ * チャージ量に比例させる。一律に遅くすると軽いパスのたびに足が止まって
+ * 窮屈になるので、「軽く蹴る＝ほぼ減速なし、フルチャージ＝大きく減速」とし、
+ * 強い球を撃つことに相応のリスクを持たせる。
+ */
+export const CHARGE_SPEED_PENALTY = 0.45;
 /** キック後、次にキックできるまでの秒数。自分で蹴って自分で追う暴走を防ぐ。 */
 export const KICK_COOLDOWN = 0.22;

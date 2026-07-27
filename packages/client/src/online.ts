@@ -63,6 +63,7 @@ export class OnlineGame implements Game {
   world: World = createWorld();
   localId = '';
   aimDir = { x: 1, y: 0 };
+  power = 1;
   onGoal: ((team: TeamId) => void) | null = null;
 
   /** サーバーの状態に未確認入力を再適用した、いま操作している世界。 */
@@ -205,6 +206,7 @@ export class OnlineGame implements Game {
     const input = quantizeInput(this.input.sample(screen));
     input.seq = this.localTick;
     this.aimDir = { x: input.aimX, y: input.aimY };
+    this.power = input.power;
 
     this.pending.push(input);
     if (this.pending.length > MAX_PENDING) this.pending.shift();

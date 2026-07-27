@@ -43,6 +43,7 @@ export function quantizeInput(input: PlayerInput): PlayerInput {
     moveY: quantizeAxis(input.moveY),
     aimX: quantizeAxis(input.aimX),
     aimY: quantizeAxis(input.aimY),
+    power: Math.round(clamp(input.power, 0, 1) * 100) / 100,
     kick: input.kick,
   };
 }
@@ -69,7 +70,14 @@ export interface SnapshotPlayer {
    * クライアントは再シミュレーション中、他プレイヤーがこの入力を保持し続けると
    * 仮定して外挿する。再シミュレーションは数ティックしかないので誤差は小さい。
    */
-  input: { moveX: number; moveY: number; aimX: number; aimY: number; kick: boolean };
+  input: {
+    moveX: number;
+    moveY: number;
+    aimX: number;
+    aimY: number;
+    power: number;
+    kick: boolean;
+  };
 }
 
 export interface Snapshot {
@@ -94,7 +102,7 @@ export interface Welcome {
 // ---------------------------------------------------------------------------
 
 const INPUT_HEADER = 2;
-const INPUT_SIZE = 9;
+const INPUT_SIZE = 10;
 
 export function encodeInputs(inputs: PlayerInput[]): ArrayBuffer {
   const count = Math.min(inputs.length, MAX_INPUTS_PER_PACKET);
@@ -115,6 +123,7 @@ export function encodeInputs(inputs: PlayerInput[]): ArrayBuffer {
     view.setInt8(o + 6, Math.round(input.aimX * 100));
     view.setInt8(o + 7, Math.round(input.aimY * 100));
     view.setUint8(o + 8, input.kick ? 1 : 0);
+    view.setUint8(o + 9, Math.round(clamp(input.power, 0, 1) * 100));
   }
   return buf;
 }
@@ -131,6 +140,7 @@ export function decodeInputs(view: DataView): PlayerInput[] {
       moveY: view.getInt8(o + 5) / 100,
       aimX: view.getInt8(o + 6) / 100,
       aimY: view.getInt8(o + 7) / 100,
+      power: view.getUint8(o + 9) / 100,
       kick: view.getUint8(o + 8) !== 0,
     });
   }
@@ -174,7 +184,7 @@ export function encodeSnapshot(s: Snapshot): ArrayBuffer {
     view.setInt8(o + 24, Math.round(p.input.moveY * 100));
     view.setInt8(o + 25, Math.round(p.input.aimX * 100));
     view.setInt8(o + 26, Math.round(p.input.aimY * 100));
-    view.setUint8(o + 27, 0);
+    view.setUint8(o + 27, Math.round(clamp(p.input.power, 0, 1) * 100));
   }
   return buf;
 }
@@ -204,6 +214,7 @@ export function decodeSnapshot(view: DataView): Snapshot {
         moveY: view.getInt8(o + 24) / 100,
         aimX: view.getInt8(o + 25) / 100,
         aimY: view.getInt8(o + 26) / 100,
+        power: view.getUint8(o + 27) / 100,
         kick: (flags & 2) !== 0,
       },
     });

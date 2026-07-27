@@ -1,6 +1,7 @@
 import {
   C,
   hasControl,
+  kickSpeed,
   type BallState,
   type PlayerState,
   type World,
@@ -89,6 +90,7 @@ export class Renderer {
     world: World,
     localId: string,
     aimDir: { x: number; y: number },
+    power: number,
     stick: StickView,
     aim: AimView,
     touchMode: boolean,
@@ -101,7 +103,7 @@ export class Renderer {
     this.drawPitch();
 
     const local = world.players.find((p) => p.id === localId);
-    if (local) this.drawAimLine(local, world.ball, aimDir);
+    if (local) this.drawAimLine(local, world.ball, aimDir, power);
 
     this.drawBall(world.ball);
     for (const p of world.players) {
@@ -253,7 +255,12 @@ export class Renderer {
   }
 
   /** 狙いとパワーの可視化。「同じ操作 = 同じ球」を目で確認できるようにする。 */
-  private drawAimLine(p: PlayerState, ball: BallState, aimDir: { x: number; y: number }): void {
+  private drawAimLine(
+    p: PlayerState,
+    ball: BallState,
+    aimDir: { x: number; y: number },
+    power: number,
+  ): void {
     const ctx = this.ctx;
     // コントロール圏外ではキックが成立しない。そこで線を出すと「蹴れる」と
     // 誤解させるので、触れているときだけ描く。チャージ中でも例外にしない。
@@ -262,9 +269,10 @@ export class Renderer {
 
     const charging = p.charge > 0;
 
+    // 実際に飛ぶ球と同じ式で長さを出す。表示と実物が食い違うと、
+    // 「同じ操作なら同じ球」という保証を目で確認できなくなる。
     const t = Math.min(1, p.charge / C.CHARGE_TIME_MAX);
-    const speed = C.KICK_SPEED_MIN + (C.KICK_SPEED_MAX - C.KICK_SPEED_MIN) * t;
-    // 線の長さでボールの初速を表す（1秒後にどこまで進むかの目安）。
+    const speed = kickSpeed(p.charge, power);
     const lengthM = speed * 0.55;
 
     const from = this.toScreen(ball.x, ball.y);

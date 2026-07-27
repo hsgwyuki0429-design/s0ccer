@@ -22,6 +22,7 @@ export class LocalGame implements Game {
   readonly world: World = createWorld();
   readonly localId = LOCAL_ID;
   aimDir = { x: 1, y: 0 };
+  power = 1;
   onGoal: ((team: TeamId) => void) | null = null;
 
   private accumulator = 0;
@@ -46,6 +47,7 @@ export class LocalGame implements Game {
       const me = this.world.players.find((p) => p.id === LOCAL_ID)!;
       const sampled = this.input.sample(this.screenOf(me.x, me.y));
       this.aimDir = { x: sampled.aimX, y: sampled.aimY };
+      this.power = sampled.power;
 
       const events = step(this.world, new Map([[LOCAL_ID, sampled]]));
       if (events.goal !== null) {

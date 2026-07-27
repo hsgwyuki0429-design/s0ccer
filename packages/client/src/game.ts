@@ -13,6 +13,8 @@ export interface Game {
   readonly localId: string;
   /** 現在の狙いの向き。 */
   readonly aimDir: { x: number; y: number };
+  /** 現在の強さの倍率（0〜1）。チャージ量に掛けて初速が決まる。 */
+  readonly power: number;
 
   onGoal: ((team: TeamId) => void) | null;
 

@@ -19,6 +19,23 @@ export function attackingGoalX(team: TeamId): number {
   return team === 0 ? C.HALF_W : -C.HALF_W;
 }
 
+/**
+ * キックの初速。チャージ量と強さの倍率の積で決まる。
+ *
+ * 乱数は入らない。同じチャージ量・同じ倍率なら必ず同じ初速になる。
+ * UI もこの関数で表示するので、画面のゲージと実際の球は常に一致する。
+ */
+export function kickSpeed(charge: number, power: number): number {
+  const t = clamp(charge / C.CHARGE_TIME_MAX, 0, 1) * clamp(power, 0, 1);
+  return C.KICK_SPEED_MIN + (C.KICK_SPEED_MAX - C.KICK_SPEED_MIN) * t;
+}
+
+/** チャージ中の最大速度。チャージ量に比例して落ちる。 */
+export function chargedMaxSpeed(charge: number): number {
+  const t = clamp(charge / C.CHARGE_TIME_MAX, 0, 1);
+  return C.PLAYER_MAX_SPEED * (1 - C.CHARGE_SPEED_PENALTY * t);
+}
+
 export function createWorld(): World {
   return {
     tick: 0,
@@ -122,8 +139,10 @@ export function step(world: World, inputs: Map<string, PlayerInput>, dt: number 
     const input = inputs.get(p.id);
     const move = input ? clampLength({ x: input.moveX, y: input.moveY }, 1) : { x: 0, y: 0 };
 
-    const targetVx = move.x * C.PLAYER_MAX_SPEED;
-    const targetVy = move.y * C.PLAYER_MAX_SPEED;
+    // チャージ中は足が遅くなる。強い球にはそれだけの拘束を伴わせる。
+    const maxSpeed = chargedMaxSpeed(p.charge);
+    const targetVx = move.x * maxSpeed;
+    const targetVy = move.y * maxSpeed;
     const targetSpeed = Math.hypot(targetVx, targetVy);
     const currentSpeed = Math.hypot(p.vx, p.vy);
     // 加速中か減速中かでレートを変える。減速を速くすると切り返しがキビキビする。
@@ -190,6 +209,7 @@ export function step(world: World, inputs: Map<string, PlayerInput>, dt: number 
     aimX: number;
     aimY: number;
     charge: number;
+    power: number;
   }
   const candidates: KickCandidate[] = [];
 
@@ -217,14 +237,21 @@ export function step(world: World, inputs: Map<string, PlayerInput>, dt: number 
     if (aim.x === 0 && aim.y === 0) aim = { x: p.facingX, y: p.facingY };
     if (aim.x === 0 && aim.y === 0) continue;
 
-    candidates.push({ p, d, aimX: aim.x, aimY: aim.y, charge: chargeAmount });
+    candidates.push({
+      p,
+      d,
+      aimX: aim.x,
+      aimY: aim.y,
+      charge: chargeAmount,
+      // 離した瞬間の傾け度で強さが決まる。狙いと同じく、指を離した時点の値。
+      power: input?.power ?? 1,
+    });
   }
 
   if (candidates.length > 0) {
     candidates.sort((a, b) => a.d - b.d);
     const winner = candidates[0];
-    const t = clamp(winner.charge / C.CHARGE_TIME_MAX, 0, 1);
-    const speed = C.KICK_SPEED_MIN + (C.KICK_SPEED_MAX - C.KICK_SPEED_MIN) * t;
+    const speed = kickSpeed(winner.charge, winner.power);
 
     // 加算ではなく代入。同じチャージ・同じ方向なら必ず同じ球が飛ぶことを保証する。
     ball.vx = winner.aimX * speed;

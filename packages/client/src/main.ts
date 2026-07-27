@@ -1,4 +1,4 @@
-import { C } from '@s0ccer/shared';
+import { C, kickSpeed } from '@s0ccer/shared';
 import type { Game } from './game.ts';
 import { InputController } from './input.ts';
 import { LocalGame } from './local.ts';
@@ -107,14 +107,25 @@ function frame(now: number): void {
     { x: (focus.x + world.ball.x) / 2, y: (focus.y + world.ball.y) / 2 },
     frameDt,
   );
-  renderer.draw(world, game.localId, game.aimDir, input.stickView(), input.aimView(), input.touchMode);
+  renderer.draw(
+    world,
+    game.localId,
+    game.aimDir,
+    game.power,
+    input.stickView(),
+    input.aimView(),
+    input.touchMode,
+  );
 
   scoreHome.textContent = String(world.score[0]);
   scoreAway.textContent = String(world.score[1]);
 
-  const charge = me ? Math.min(1, me.charge / C.CHARGE_TIME_MAX) : 0;
-  powerFill.style.width = `${charge * 100}%`;
-  powerFill.classList.toggle('max', charge >= 1);
+  // ゲージは「チャージ量」ではなく「実際に飛ぶ球の強さ」を出す。
+  // 傾け度で弱めた場合もそのまま見えるようにするため。
+  const speed = me ? kickSpeed(me.charge, game.power) : C.KICK_SPEED_MIN;
+  const ratio = (speed - C.KICK_SPEED_MIN) / (C.KICK_SPEED_MAX - C.KICK_SPEED_MIN);
+  powerFill.style.width = `${ratio * 100}%`;
+  powerFill.classList.toggle('max', ratio >= 0.999);
 
   statusEl.textContent = game.statusText();
   resetBtn.style.display = net ? 'none' : '';
@@ -122,7 +133,7 @@ function frame(now: number): void {
   debugEl.textContent = [`fps    ${accumulatedFps.toFixed(0)}`, ...game.debugLines()].join('\n');
 
   hintEl.textContent = input.touchMode
-    ? '左半分: 移動（浮動スティック）\n右半分: 長押しでチャージ → 指の向きへキック'
+    ? '左半分: 移動（浮動スティック）\n右半分: 長押しでチャージ → 指の向きへキック\n倒し量が強さ。チャージ中は足が遅くなる'
     : 'WASD / 矢印: 移動\nマウス長押し: チャージ → カーソル方向へキック\nR: リセット';
 
   requestAnimationFrame(frame);

@@ -94,6 +94,7 @@ function buildSnapshot(forClient: Client): Snapshot {
         moveY: input.moveY,
         aimX: input.aimX,
         aimY: input.aimY,
+        power: input.power,
         kick: input.kick,
       },
     };
