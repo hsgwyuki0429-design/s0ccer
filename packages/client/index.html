@@ -94,6 +94,15 @@
   #power .fill.max {
     background: #ffe14d;
   }
+  #status {
+    top: calc(52px + env(safe-area-inset-top, 0px));
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    opacity: 0.6;
+    white-space: nowrap;
+  }
   #debug {
     top: calc(8px + env(safe-area-inset-top, 0px));
     left: calc(10px + env(safe-area-inset-left, 0px));
@@ -153,6 +162,7 @@
   <div class="track"><div class="fill" id="power-fill"></div></div>
 </div>
 
+<div class="hud" id="status"></div>
 <div class="hud" id="debug"></div>
 <div class="hud" id="hint"></div>
 <button class="hud" id="reset">RESET</button>

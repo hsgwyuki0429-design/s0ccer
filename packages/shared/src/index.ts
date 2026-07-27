@@ -3,3 +3,4 @@ export * from './constants.ts';
 export * from './math.ts';
 export * from './types.ts';
 export * from './sim.ts';
+export * from './protocol.ts';
