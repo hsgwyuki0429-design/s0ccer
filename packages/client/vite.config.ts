@@ -2,6 +2,9 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+  // GitHub Pages はリポジトリ名のサブパス配信になるため、本番ビルドのみ
+  // base を /s0ccer/ にする。dev サーバーはルート配信のままでよい。
+  base: process.env.GITHUB_PAGES ? '/s0ccer/' : '/',
   resolve: {
     alias: {
       // shared はビルド成果物ではなくソースを直接参照する。
