@@ -67,6 +67,17 @@ export class InputController {
   /** 最後に触れた入力方式。UI の出し分けに使う。 */
   touchMode = false;
 
+  /**
+   * GK 交代の要求。UI のボタンから立てて、1ティック消費したら下ろす。
+   * 押しっぱなしでも副作用はないが、意図しない再取得を避けるため単発にする。
+   */
+  private claimGkPending = false;
+
+  /** 画面上のボタンから呼ぶ。次の入力で GK 交代を要求する。 */
+  requestGoalkeeper(): void {
+    this.claimGkPending = true;
+  }
+
   constructor(private canvas: HTMLCanvasElement) {
     this.attach();
   }
@@ -220,6 +231,8 @@ export class InputController {
     input.aimX = this.lastAim.x;
     input.aimY = this.lastAim.y;
     input.power = this.lastPower;
+    input.claimGk = this.claimGkPending;
+    this.claimGkPending = false;
     return input;
   }
 

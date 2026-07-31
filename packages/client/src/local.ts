@@ -2,8 +2,11 @@ import {
   C,
   createPlayer,
   createWorld,
+  ensureGoalkeepers,
   resetPositions,
+  startMatch,
   step,
+  type LobbyInfo,
   type TeamId,
   type World,
 } from '@s0ccer/shared';
@@ -24,6 +27,7 @@ export class LocalGame implements Game {
   aimDir = { x: 1, y: 0 };
   power = 1;
   onGoal: ((team: TeamId) => void) | null = null;
+  readonly lobby: LobbyInfo | null = null;
 
   private accumulator = 0;
   private peakKick = 0;
@@ -33,7 +37,13 @@ export class LocalGame implements Game {
     private screenOf: ScreenOf,
   ) {
     this.world.players.push(createPlayer(LOCAL_ID, 0));
-    resetPositions(this.world);
+    // 1人だけなのでその選手が GK。自陣ゴールエリアに入れる。
+    ensureGoalkeepers(this.world);
+    startMatch(this.world, resetPositions);
+  }
+
+  requestGoalkeeper(): void {
+    this.input.requestGoalkeeper();
   }
 
   update(frameDt: number): void {
@@ -74,9 +84,7 @@ export class LocalGame implements Game {
   }
 
   reset(): void {
-    this.world.score[0] = 0;
-    this.world.score[1] = 0;
-    resetPositions(this.world);
+    startMatch(this.world, resetPositions);
     this.peakKick = 0;
   }
 }

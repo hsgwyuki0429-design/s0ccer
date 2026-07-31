@@ -1,13 +1,17 @@
 import {
+  MSG_LOBBY,
   MSG_PONG,
   MSG_SNAPSHOT,
   MSG_WELCOME,
   MSG_PING,
+  decodeLobby,
   decodePingPongId,
   decodeSnapshot,
   decodeWelcome,
+  encodeHello,
   encodeInputs,
   encodePingPong,
+  type LobbyInfo,
   type PlayerInput,
   type Snapshot,
   type Welcome,
@@ -34,18 +38,21 @@ export class NetClient {
 
   onWelcome: ((w: Welcome) => void) | null = null;
   onSnapshot: ((s: Snapshot) => void) | null = null;
+  onLobby: ((info: LobbyInfo) => void) | null = null;
 
   private ws: WebSocket;
   private pingTimer: number | null = null;
   private pingId = 0;
   private pendingPings = new Map<number, number>();
 
-  constructor(url: string) {
+  constructor(url: string, partyCode: string) {
     this.ws = new WebSocket(url);
     this.ws.binaryType = 'arraybuffer';
 
     this.ws.addEventListener('open', () => {
       this.status = 'open';
+      // 参加要求。コードが空なら、サーバーが新しいパーティを作って返す。
+      this.ws.send(encodeHello(partyCode));
       this.pingTimer = window.setInterval(() => this.sendPing(), PING_INTERVAL);
       this.sendPing();
     });
@@ -91,6 +98,10 @@ export class NetClient {
       case MSG_WELCOME: {
         this.welcome = decodeWelcome(view);
         this.onWelcome?.(this.welcome);
+        break;
+      }
+      case MSG_LOBBY: {
+        this.onLobby?.(decodeLobby(view));
         break;
       }
       case MSG_SNAPSHOT: {

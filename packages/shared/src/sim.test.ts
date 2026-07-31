@@ -13,8 +13,19 @@ import { emptyInput, type PlayerInput, type World } from './types.ts';
  *   - キックの再現性（「同じ操作なら同じ球」というゲームの約束）
  */
 
+/**
+ * 物理のテストは常にプレー中の状態から始める。
+ * createWorld() はカウントダウンから始まり、その間は入力を受け付けない。
+ */
+function beginPlay(w: World): World {
+  w.phase = 'playing';
+  w.phaseTimer = 0;
+  w.clock = w.config.halfSeconds;
+  return w;
+}
+
 function worldWithPlayer(x: number, y: number, ballX: number, ballY: number): World {
-  const w = createWorld();
+  const w = beginPlay(createWorld());
   const p = createPlayer('p1', 0);
   p.x = x;
   p.y = y;
@@ -249,7 +260,7 @@ test('ドリブルでボールが進行方向へ運ばれる', () => {
 });
 
 test('同一ティックに2人が離したらボールに近いほうが勝つ', () => {
-  const w = createWorld();
+  const w = beginPlay(createWorld());
   const near = createPlayer('near', 0);
   near.x = -0.7;
   near.y = 0;

@@ -5,6 +5,7 @@ import {
   quantizeInput,
   step,
   type PlayerInput,
+  type LobbyInfo,
   type PlayerState,
   type Snapshot,
   type TeamId,
@@ -52,10 +53,23 @@ function worldFromSnapshot(s: Snapshot): World {
         charge: p.charge,
         kickHeld: p.kickHeld,
         kickCooldown: p.kickCooldown,
+        isGk: p.isGk,
+        isAi: p.isAi,
       }),
     ),
     ball: { ...s.ball },
     score: [s.score[0], s.score[1]],
+    config: { ...s.config },
+    phase: s.phase,
+    phaseTimer: s.phaseTimer,
+    half: s.half,
+    clock: s.clock,
+    sidesSwapped: s.sidesSwapped,
+    // lastTouch はスナップショットに載せていない。予測でラインを割った場合の
+    // 再開側がずれうるが、次のスナップショットで訂正されるので実害はない。
+    lastTouch: null,
+    restartTeam: s.restartTeam,
+    restartTimer: s.restartTimer,
   };
 }
 
@@ -65,6 +79,7 @@ export class OnlineGame implements Game {
   aimDir = { x: 1, y: 0 };
   power = 1;
   onGoal: ((team: TeamId) => void) | null = null;
+  lobby: LobbyInfo | null = null;
 
   /** サーバーの状態に未確認入力を再適用した、いま操作している世界。 */
   private predicted: World = createWorld();
@@ -95,6 +110,13 @@ export class OnlineGame implements Game {
       this.localId = String(w.slot);
     };
     this.net.onSnapshot = (s) => this.applySnapshot(s);
+    this.net.onLobby = (info) => {
+      this.lobby = info;
+    };
+  }
+
+  requestGoalkeeper(): void {
+    this.input.requestGoalkeeper();
   }
 
   // --- サーバーからの訂正 ---------------------------------------------------

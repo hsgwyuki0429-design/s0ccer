@@ -1,4 +1,4 @@
-import type { TeamId, World } from '@s0ccer/shared';
+import type { LobbyInfo, TeamId, World } from '@s0ccer/shared';
 
 /**
  * ゲームモードの共通インターフェース。
@@ -17,6 +17,12 @@ export interface Game {
   readonly power: number;
 
   onGoal: ((team: TeamId) => void) | null;
+
+  /** パーティと部屋の状況。オフラインでは null。 */
+  readonly lobby: LobbyInfo | null;
+
+  /** 画面右上のボタンから GK 交代を要求する。 */
+  requestGoalkeeper(): void;
 
   update(frameDt: number): void;
   /** HUD 左上に出すデバッグ行。 */

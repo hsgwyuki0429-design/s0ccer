@@ -13,7 +13,7 @@
     "build": "npm run build -w @s0ccer/client",
     "preview": "npm run preview -w @s0ccer/client",
     "check": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test \"packages/shared/src/*.test.ts\""
+    "test": "node --test \"packages/*/src/**/*.test.ts\""
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

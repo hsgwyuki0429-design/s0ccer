@@ -1,7 +1,9 @@
 import {
   C,
+  defendingSide,
   hasControl,
   kickSpeed,
+  teamDefending,
   type BallState,
   type PlayerState,
   type World,
@@ -100,9 +102,9 @@ export class Renderer {
     ctx.fillStyle = '#14361f';
     ctx.fillRect(0, 0, this.viewW, this.viewH);
 
-    this.drawPitch();
-
     const local = world.players.find((p) => p.id === localId);
+    this.drawPitch(world, local ?? null);
+
     if (local) this.drawAimLine(local, world.ball, aimDir, power);
 
     this.drawBall(world.ball);
@@ -110,13 +112,15 @@ export class Renderer {
       this.drawPlayer(p, p.id === localId, world.ball);
     }
 
+    this.drawOffscreenMarkers(world, localId);
+
     if (touchMode) {
       this.drawStick(stick);
       this.drawAimPad(aim);
     }
   }
 
-  private drawPitch(): void {
+  private drawPitch(world: World, local: PlayerState | null): void {
     const ctx = this.ctx;
     const s = this.scale;
     const tl = this.toScreen(-C.HALF_W, -C.HALF_H);
@@ -158,13 +162,20 @@ export class Renderer {
       const goalX = side * C.HALF_W;
       const g = this.toScreen(goalX, 0);
 
-      // ゴールエリア（侵入禁止の半円）。GK の代わりなので視覚的に強調する。
+      // ゴールエリア（半円）。GK だけが自陣のここに入れる。
+      // 自分が入れるエリアは、入れないエリアと色を変えて区別できるようにする。
+      const enterable =
+        local !== null && local.isGk && side === defendingSide(local.team, world.sidesSwapped);
+      const owner = teamDefending(side, world.sidesSwapped);
+
       const a0 = side === 1 ? Math.PI / 2 : -Math.PI / 2;
       const a1 = side === 1 ? (Math.PI * 3) / 2 : Math.PI / 2;
       ctx.beginPath();
       ctx.arc(g.x, g.y, C.GOAL_AREA_RADIUS * s, a0, a1);
       ctx.closePath();
-      ctx.fillStyle = 'rgba(255,255,255,0.07)';
+      ctx.fillStyle = enterable
+        ? 'rgba(126,217,87,0.16)'
+        : `${TEAM_COLORS[owner]}14`;
       ctx.fill();
       ctx.stroke();
 
@@ -243,6 +254,23 @@ export class Renderer {
     ctx.stroke();
     ctx.lineCap = 'butt';
 
+    // GK は輪郭を金色にして、離れていても一目で分かるようにする。
+    if (p.isGk) {
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, r * 1.18, 0, Math.PI * 2);
+      ctx.lineWidth = Math.max(2, r * 0.2);
+      ctx.strokeStyle = '#ffd24d';
+      ctx.stroke();
+    }
+
+    // AI は中心に小さな点を打って人間と区別する。
+    if (p.isAi) {
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, Math.max(1.5, r * 0.16), 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fill();
+    }
+
     // チャージリング
     if (p.charge > 0) {
       const t = Math.min(1, p.charge / C.CHARGE_TIME_MAX);
@@ -289,6 +317,59 @@ export class Renderer {
     ctx.lineTo(to.x, to.y);
     ctx.stroke();
     ctx.restore();
+  }
+
+  /**
+   * 画面外にいる選手とボールを、画面端の矢印で示す。
+   *
+   * 3v3 のピッチは画面に収まらないので、これがないと味方も敵も見失う。
+   * ミニマップより視線移動が少なく、操作中でも把握しやすい。
+   */
+  private drawOffscreenMarkers(world: World, localId: string): void {
+    const ctx = this.ctx;
+    const pad = 26;
+    const w = this.viewW;
+    const h = this.viewH;
+
+    const marks: { x: number; y: number; color: string; size: number }[] = [];
+    for (const p of world.players) {
+      if (p.id === localId) continue;
+      marks.push({ x: p.x, y: p.y, color: TEAM_COLORS[p.team], size: 7 });
+    }
+    marks.push({ x: world.ball.x, y: world.ball.y, color: '#ffffff', size: 5 });
+
+    for (const m of marks) {
+      const s = this.toScreen(m.x, m.y);
+      const outside = s.x < pad || s.x > w - pad || s.y < pad || s.y > h - pad;
+      if (!outside) continue;
+
+      // 画面中心からその方向へ伸ばし、余白の内側でぶつかった点に置く。
+      const cx = w / 2;
+      const cy = h / 2;
+      const dx = s.x - cx;
+      const dy = s.y - cy;
+      if (dx === 0 && dy === 0) continue;
+
+      const scaleX = dx === 0 ? Infinity : (w / 2 - pad) / Math.abs(dx);
+      const scaleY = dy === 0 ? Infinity : (h / 2 - pad) / Math.abs(dy);
+      const k = Math.min(scaleX, scaleY);
+      const ex = cx + dx * k;
+      const ey = cy + dy * k;
+
+      const angle = Math.atan2(dy, dx);
+      ctx.save();
+      ctx.translate(ex, ey);
+      ctx.rotate(angle);
+      ctx.beginPath();
+      ctx.moveTo(m.size, 0);
+      ctx.lineTo(-m.size, -m.size * 0.75);
+      ctx.lineTo(-m.size, m.size * 0.75);
+      ctx.closePath();
+      ctx.fillStyle = m.color;
+      ctx.globalAlpha = 0.85;
+      ctx.fill();
+      ctx.restore();
+    }
   }
 
   private drawStick(stick: StickView): void {
