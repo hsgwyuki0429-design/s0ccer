@@ -1,20 +1,26 @@
-# Render へのデプロイ設定。
+# Render へのデプロイ設定（Blueprint）。
 #
-# GitHub リポジトリを繋いで Blueprint として読み込ませると、この定義どおりに
-# 作られる。ブラウザだけで完結するので、CLI を入れたくない場合はこちら。
+# Render のダッシュボードで New → Blueprint → このリポジトリを選ぶと、
+# この定義どおりにサービスが作られる。CLI は要らない。
 #
-# 注意: 無料プランはアクセスが無いとインスタンスが停止し、次のアクセスで
-# 起動し直すまで数十秒かかる。遊ぶ直前に一度 /health を開いて起こしておくか、
-# 有料プランにする。
+# 無料プランは約15分アイドルでインスタンスが停止し、次のアクセスで
+# 起動し直すまで1分近くかかる。クライアントは接続に失敗しても諦めずに
+# 繋ぎ直すようにしてあるので、待っていれば繋がる（画面には
+# 「サーバー起動中…」と出る）。待ち時間が気になるなら有料プランにする。
 
 services:
   - type: web
     name: s0ccer-server
     runtime: docker
     dockerfilePath: ./Dockerfile
-    region: singapore # Render に日本リージョンはない。国内からは最寄り
+    dockerContext: .
+    # Render に日本リージョンはない。国内からは singapore が最寄り。
+    region: singapore
     plan: free
+    # デプロイ元のブランチ。main にマージしたらここも main に変える。
+    branch: claude/online-soccer-game-m5lxvu
     healthCheckPath: /health
     envVars:
+      # Render は PORT を注入するが、明示しておくとローカルと揃う。
       - key: PORT
         value: 8787

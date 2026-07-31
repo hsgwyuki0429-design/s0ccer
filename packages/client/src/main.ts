@@ -68,19 +68,88 @@ function secureIfNeeded(url: string): string {
   return `wss://${url.slice('ws://'.length)}`;
 }
 
+/**
+ * 再接続の待ち時間（秒）。
+ *
+ * 無料ホスティングはアイドルでインスタンスを止めることがあり、復帰に
+ * 1分近くかかる。1回失敗しただけでオフラインへ落とすと、そういう
+ * サーバーには永久に繋がらない。
+ */
+const RETRY_DELAYS = [1, 2, 4, 8, 12, 15, 15, 15];
+
 let net: NetClient | null = null;
 let game: Game;
+let offline = false;
+/** 連続で失敗した回数。成功したら 0 に戻す。 */
+let failures = 0;
+/** 次に接続を試してよい時刻（performance.now 基準）。 */
+let nextAttemptAt = 0;
+/** 一度でも参加できたか。冷起動待ちと「そもそも繋がらない」を区別する。 */
+let everJoined = false;
 
 function startLocal(): void {
+  offline = true;
   game = new LocalGame(input, screenOf);
   game.onGoal = showGoal;
 }
 
 function startOnline(url: string): void {
-  const party = new URLSearchParams(location.search).get('party') ?? '';
-  net = new NetClient(url, party);
+  offline = false;
+  net = new NetClient(url, partyCode());
   game = new OnlineGame(net, input, screenOf);
   game.onGoal = showGoal;
+}
+
+/** 現在のパーティコード。URL に無ければ空文字（サーバーが新規発行する）。 */
+function partyCode(): string {
+  return new URLSearchParams(location.search).get('party') ?? '';
+}
+
+/**
+ * サーバーから受け取ったパーティコードを URL に書き戻す。
+ *
+ * 再接続したときに同じパーティへ戻れるようにするため。ついでに、
+ * 共有ボタンを押さなくてもアドレスバーがそのまま招待リンクになる。
+ */
+function rememberParty(code: string): void {
+  if (!code || partyCode() === code) return;
+  const url = new URL(location.href);
+  url.searchParams.set('party', code);
+  history.replaceState(null, '', url);
+}
+
+/**
+ * 接続を維持する。毎フレーム呼ばれ、切れていれば間隔を空けて繋ぎ直す。
+ *
+ * 一度も参加できないまま試行回数を使い切った場合だけオフラインへ落とす。
+ * 途中で切れた場合は諦めずに繋ぎ直す（サーバーの再起動を跨ぎたいため）。
+ */
+function maintainConnection(url: string, now: number): void {
+  if (net) {
+    if (net.welcome) {
+      everJoined = true;
+      failures = 0;
+    }
+    if (net.status !== 'closed' && net.status !== 'error') return;
+    net.close();
+    net = null;
+  }
+
+  if (!everJoined && failures >= RETRY_DELAYS.length) {
+    if (!offline) startLocal();
+    return;
+  }
+
+  if (now < nextAttemptAt) return;
+  nextAttemptAt = now + RETRY_DELAYS[Math.min(failures, RETRY_DELAYS.length - 1)] * 1000;
+  failures++;
+  startOnline(url);
+}
+
+/** 接続をやり直している最中かどうかの表示。 */
+function retryNote(): string | null {
+  if (offline || failures <= 1 || everJoined) return null;
+  return `サーバー起動中… (${failures}/${RETRY_DELAYS.length})`;
 }
 
 function showGoal(team: number): void {
@@ -91,8 +160,13 @@ function showGoal(team: number): void {
 }
 
 const serverUrl = resolveServerUrl();
-if (serverUrl) startOnline(serverUrl);
-else startLocal();
+if (serverUrl) {
+  failures = 1;
+  nextAttemptAt = performance.now() + RETRY_DELAYS[0] * 1000;
+  startOnline(serverUrl);
+} else {
+  startLocal();
+}
 
 resetBtn.addEventListener('click', () => game.reset());
 gkBtn.addEventListener('click', () => game.requestGoalkeeper());
@@ -173,12 +247,7 @@ function frame(now: number): void {
 
   renderer.resize();
 
-  // 一度も繋がらないまま切れたらオフラインへ落とす。
-  if (net && (net.status === 'closed' || net.status === 'error') && net.welcome === null) {
-    net.close();
-    net = null;
-    startLocal();
-  }
+  if (serverUrl) maintainConnection(serverUrl, now);
 
   if (input.consumeKey('KeyR')) game.reset();
   if (input.consumeKey('KeyG')) game.requestGoalkeeper();
@@ -217,12 +286,17 @@ function frame(now: number): void {
   gkBtn.classList.toggle('active', me?.isGk === true);
   gkBtn.textContent = me?.isGk ? 'キーパー中' : 'キーパーになる';
   inviteBtn.style.display = game.lobby ? '' : 'none';
-  resetBtn.style.display = net ? 'none' : '';
+  resetBtn.style.display = offline ? '' : 'none';
 
   const lobby = game.lobby;
-  statusEl.textContent = lobby
-    ? `${game.statusText()} ・ パーティ ${lobby.partyCode}（${lobby.partySize}人）`
-    : game.statusText();
+  if (lobby) rememberParty(lobby.partyCode);
+
+  const note = retryNote();
+  statusEl.textContent = note
+    ? note
+    : lobby
+      ? `${game.statusText()} ・ パーティ ${lobby.partyCode}（${lobby.partySize}人）`
+      : game.statusText();
 
   debugEl.textContent = [`fps    ${accumulatedFps.toFixed(0)}`, ...game.debugLines()].join('\n');
 
