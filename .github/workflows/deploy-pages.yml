@@ -1,4 +1,4 @@
-name: Deploy Phase 1 prototype to GitHub Pages
+name: Deploy client to GitHub Pages
 
 on:
   push:
@@ -25,9 +25,15 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
+      - run: npm test
+      - run: npm run check
       - run: npm run build
         env:
           GITHUB_PAGES: 'true'
+          # サーバーをデプロイしたら、リポジトリの Variables に SERVER_URL を
+          # 設定する（例: wss://s0ccer.fly.dev）。それだけで Pages が
+          # オンライン対戦に繋がるようになる。未設定ならオフラインで動く。
+          VITE_SERVER_URL: ${{ vars.SERVER_URL }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: packages/client/dist

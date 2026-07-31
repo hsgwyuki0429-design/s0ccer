@@ -1,0 +1,33 @@
+# Fly.io へのデプロイ設定。
+#
+#   fly launch --no-deploy   # 初回だけ。アプリ名を決める
+#   fly deploy
+#
+# WebSocket をそのまま流せて、東京リージョンがあるので国内向けには相性がよい。
+
+app = "s0ccer"
+primary_region = "nrt" # 東京
+
+[build]
+dockerfile = "Dockerfile"
+
+[env]
+PORT = "8787"
+
+[http_service]
+internal_port = 8787
+force_https = true
+# ゲームサーバーなので勝手に止めない。止まると再接続まで数秒かかる。
+auto_stop_machines = false
+auto_start_machines = true
+min_machines_running = 1
+
+[[http_service.checks]]
+path = "/health"
+interval = "30s"
+timeout = "3s"
+grace_period = "10s"
+
+[[vm]]
+size = "shared-cpu-1x"
+memory = "256mb"

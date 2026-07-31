@@ -46,16 +46,26 @@ function resolveServerUrl(): string | null {
   if (params.get('offline') !== null) return null;
 
   const explicit = params.get('server');
-  if (explicit) return explicit;
+  if (explicit) return secureIfNeeded(explicit);
 
   const configured = import.meta.env.VITE_SERVER_URL;
-  if (configured) return configured;
+  if (configured) return secureIfNeeded(configured);
 
   if (import.meta.env.DEV) {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${proto}//${location.hostname}:8787`;
   }
   return null;
+}
+
+/**
+ * HTTPS のページからは ws:// に繋げない（混在コンテンツとしてブラウザに
+ * 遮断される）。同じホストで TLS 終端しているのが普通なので、黙って落ちる
+ * より wss:// へ上げたほうが繋がる可能性が高い。
+ */
+function secureIfNeeded(url: string): string {
+  if (location.protocol !== 'https:' || !url.startsWith('ws://')) return url;
+  return `wss://${url.slice('ws://'.length)}`;
 }
 
 let net: NetClient | null = null;
