@@ -1,0 +1,8 @@
+node_modules
+**/node_modules
+**/dist
+.git
+.github
+docs
+*.log
+.DS_Store

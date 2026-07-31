@@ -1,0 +1,49 @@
+name: Deploy client to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+      - claude/online-soccer-game-m5lxvu
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm test
+      - run: npm run check
+      - run: npm run build
+        env:
+          GITHUB_PAGES: 'true'
+          # サーバーをデプロイしたら、リポジトリの Variables に SERVER_URL を
+          # 設定する（例: wss://s0ccer.fly.dev）。それだけで Pages が
+          # オンライン対戦に繋がるようになる。未設定ならオフラインで動く。
+          VITE_SERVER_URL: ${{ vars.SERVER_URL }}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: packages/client/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

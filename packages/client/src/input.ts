@@ -1,4 +1,4 @@
-import { emptyInput, normalize, type PlayerInput } from '@s0ccer/shared';
+import { clamp, emptyInput, normalize, type PlayerInput } from '@s0ccer/shared';
 
 /**
  * 入力の抽象化。タッチとマウス／キーボードの差をここで吸収し、
@@ -15,6 +15,10 @@ import { emptyInput, normalize, type PlayerInput } from '@s0ccer/shared';
 const STICK_RADIUS = 64;
 /** これ未満の指移動は「狙いなし」として扱う。誤爆防止のデッドゾーン。 */
 const AIM_DEADZONE = 14;
+/** 狙いのスティックをここまで倒すとキックの強さが最大になる。 */
+const AIM_MAX_RADIUS = 72;
+/** 倒し量が最小のときの強さ。0 にすると「蹴ったのに飛ばない」になるので下限を設ける。 */
+const MIN_POWER = 0.15;
 
 export interface StickView {
   active: boolean;
@@ -51,11 +55,28 @@ export class InputController {
   private mouseDown = false;
   private seq = 0;
 
-  /** 直近に確定した狙い。指を動かさずに離したときのフォールバックに使う。 */
+  /**
+   * 直近に確定した狙いと強さ。
+   *
+   * 指を離した瞬間にはポインタがもう存在しないので、離す直前の値を
+   * ここに保持しておき、キック成立時にはこれが使われる。
+   */
   private lastAim = { x: 1, y: 0 };
+  private lastPower = 1;
 
   /** 最後に触れた入力方式。UI の出し分けに使う。 */
   touchMode = false;
+
+  /**
+   * GK 交代の要求。UI のボタンから立てて、1ティック消費したら下ろす。
+   * 押しっぱなしでも副作用はないが、意図しない再取得を避けるため単発にする。
+   */
+  private claimGkPending = false;
+
+  /** 画面上のボタンから呼ぶ。次の入力で GK 交代を要求する。 */
+  requestGoalkeeper(): void {
+    this.claimGkPending = true;
+  }
 
   constructor(private canvas: HTMLCanvasElement) {
     this.attach();
@@ -181,26 +202,37 @@ export class InputController {
     input.moveY = move.y;
 
     let aim: { x: number; y: number } | null = null;
+    let power: number | null = null;
     let kick = false;
 
     if (this.aimPointer) {
       kick = true;
       const dx = this.aimPointer.x - this.aimPointer.startX;
       const dy = this.aimPointer.y - this.aimPointer.startY;
-      if (Math.hypot(dx, dy) >= AIM_DEADZONE) aim = normalize({ x: dx, y: dy });
+      const len = Math.hypot(dx, dy);
+      if (len >= AIM_DEADZONE) aim = normalize({ x: dx, y: dy });
+      // 倒し量がそのまま強さになる。フルチャージのままでも弱い球が撃てる。
+      power = clamp(len / AIM_MAX_RADIUS, MIN_POWER, 1);
     } else if (this.mouseDown) {
       kick = true;
       aim = normalize({ x: this.mouseX - playerScreen.x, y: this.mouseY - playerScreen.y });
+      // マウスは狙いが一瞬で定まるので、強さはチャージ時間だけで決める。
+      power = 1;
     } else if (!this.touchMode) {
       // マウス操作では、押していないときもカーソル方向を狙いとして表示したい。
       aim = normalize({ x: this.mouseX - playerScreen.x, y: this.mouseY - playerScreen.y });
+      power = 1;
     }
 
     if (aim && (aim.x !== 0 || aim.y !== 0)) this.lastAim = aim;
+    if (power !== null) this.lastPower = power;
 
     input.kick = kick;
     input.aimX = this.lastAim.x;
     input.aimY = this.lastAim.y;
+    input.power = this.lastPower;
+    input.claimGk = this.claimGkPending;
+    this.claimGkPending = false;
     return input;
   }
 

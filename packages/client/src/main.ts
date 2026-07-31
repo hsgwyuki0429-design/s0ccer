@@ -1,25 +1,18 @@
-import {
-  C,
-  createPlayer,
-  createWorld,
-  resetPositions,
-  step,
-  type PlayerInput,
-} from '@s0ccer/shared';
+import { C, kickSpeed, winner, type MatchPhase, type World } from '@s0ccer/shared';
+import type { Game } from './game.ts';
 import { InputController } from './input.ts';
+import { LocalGame } from './local.ts';
+import { NetClient } from './net.ts';
+import { OnlineGame } from './online.ts';
 import { Renderer } from './render.ts';
 
 /**
- * Phase 1: ローカル1人プロトタイプ。
+ * エントリポイント。ゲームモードを選び、固定タイムステップのループを回す。
  *
- * 目的はネットワークではなく **手触りの確定**。ここで操作感が決まらないまま
- * オンライン化しても意味がないので、まず物理と入力だけを詰める。
- *
- * シミュレーションは Phase 2 以降と同じ固定タイムステップ（60Hz）で回す。
- * 描画のフレームレートとは切り離してあるので、120Hz 画面でも挙動は変わらない。
+ * サーバーが設定されていればオンライン、なければオフライン（単独）で動く。
+ * オンラインに繋がらなかった場合もオフラインへ落ちる。静的ホスティングに
+ * 置いたビルドが「何も遊べないページ」にならないようにするため。
  */
-
-const LOCAL_ID = 'me';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const scoreHome = document.getElementById('score-home') as HTMLElement;
@@ -27,81 +20,183 @@ const scoreAway = document.getElementById('score-away') as HTMLElement;
 const powerFill = document.getElementById('power-fill') as HTMLElement;
 const debugEl = document.getElementById('debug') as HTMLElement;
 const hintEl = document.getElementById('hint') as HTMLElement;
+const statusEl = document.getElementById('status') as HTMLElement;
+const clockEl = document.getElementById('clock') as HTMLElement;
 const resetBtn = document.getElementById('reset') as HTMLButtonElement;
+const gkBtn = document.getElementById('gk') as HTMLButtonElement;
+const inviteBtn = document.getElementById('invite') as HTMLButtonElement;
 const flashEl = document.getElementById('flash') as HTMLElement;
-
-const world = createWorld();
-world.players.push(createPlayer(LOCAL_ID, 0));
-resetPositions(world);
+const bannerEl = document.getElementById('banner') as HTMLElement;
+const bannerTitle = bannerEl.querySelector('.title') as HTMLElement;
+const bannerSub = bannerEl.querySelector('.sub') as HTMLElement;
 
 const renderer = new Renderer(canvas);
 const input = new InputController(canvas);
+const screenOf = (x: number, y: number) => renderer.toScreen(x, y);
 
-let lastInput: PlayerInput | null = null;
-let accumulator = 0;
-let lastTime = performance.now();
-let fps = 60;
-/** ボール速度の直近ピーク。キック力の確認用。 */
-let peakBallSpeed = 0;
+/**
+ * 接続先の決め方。
+ *   1. ?server=wss://... を最優先（静的ビルドから繋ぐ用）
+ *   2. ビルド時の VITE_SERVER_URL
+ *   3. 開発サーバーなら同じホストの :8787
+ *   4. どれもなければオフライン
+ */
+function resolveServerUrl(): string | null {
+  const params = new URLSearchParams(location.search);
+  if (params.get('offline') !== null) return null;
 
-resetBtn.addEventListener('click', () => {
-  world.score[0] = 0;
-  world.score[1] = 0;
-  resetPositions(world);
-  peakBallSpeed = 0;
-});
+  const explicit = params.get('server');
+  if (explicit) return secureIfNeeded(explicit);
 
-function showFlash(text: string, color: string): void {
-  flashEl.textContent = text;
-  flashEl.style.color = color;
+  const configured = import.meta.env.VITE_SERVER_URL;
+  if (configured) return secureIfNeeded(configured);
+
+  if (import.meta.env.DEV) {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${location.hostname}:8787`;
+  }
+  return null;
+}
+
+/**
+ * HTTPS のページからは ws:// に繋げない（混在コンテンツとしてブラウザに
+ * 遮断される）。同じホストで TLS 終端しているのが普通なので、黙って落ちる
+ * より wss:// へ上げたほうが繋がる可能性が高い。
+ */
+function secureIfNeeded(url: string): string {
+  if (location.protocol !== 'https:' || !url.startsWith('ws://')) return url;
+  return `wss://${url.slice('ws://'.length)}`;
+}
+
+let net: NetClient | null = null;
+let game: Game;
+
+function startLocal(): void {
+  game = new LocalGame(input, screenOf);
+  game.onGoal = showGoal;
+}
+
+function startOnline(url: string): void {
+  const party = new URLSearchParams(location.search).get('party') ?? '';
+  net = new NetClient(url, party);
+  game = new OnlineGame(net, input, screenOf);
+  game.onGoal = showGoal;
+}
+
+function showGoal(team: number): void {
+  flashEl.textContent = 'GOAL';
+  flashEl.style.color = team === 0 ? '#4da3ff' : '#ff6b4d';
   flashEl.classList.add('show');
   window.setTimeout(() => flashEl.classList.remove('show'), 900);
 }
 
+const serverUrl = resolveServerUrl();
+if (serverUrl) startOnline(serverUrl);
+else startLocal();
+
+resetBtn.addEventListener('click', () => game.reset());
+gkBtn.addEventListener('click', () => game.requestGoalkeeper());
+
+inviteBtn.addEventListener('click', async () => {
+  const code = game.lobby?.partyCode;
+  if (!code) return;
+  const url = new URL(location.href);
+  url.searchParams.set('party', code);
+  const link = url.toString();
+
+  // 共有シートが使えるならそちら、無理ならクリップボードへ。
+  try {
+    if (navigator.share) await navigator.share({ url: link });
+    else await navigator.clipboard.writeText(link);
+    inviteBtn.textContent = 'コピーしました';
+  } catch {
+    inviteBtn.textContent = code;
+  }
+  window.setTimeout(() => {
+    inviteBtn.textContent = '招待リンク';
+  }, 1600);
+});
+
+/** 秒を mm:ss にする。 */
+function formatClock(seconds: number): string {
+  const total = Math.max(0, Math.ceil(seconds));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/** 試合の状況を1行で表す。 */
+function clockText(world: World): string {
+  if (world.config.mode === 'firstTo') {
+    return `${world.config.targetScore}点先取 ・ ${formatClock(world.clock)}`;
+  }
+  return `${world.half === 1 ? '前半' : '後半'} ${formatClock(world.clock)}`;
+}
+
+/** カウントダウンやハーフタイムなど、プレー外の表示。 */
+function updateBanner(world: World, localTeam: 0 | 1 | null): void {
+  const phase: MatchPhase = world.phase;
+
+  if (phase === 'playing') {
+    bannerEl.classList.remove('show');
+    return;
+  }
+
+  let title = '';
+  let sub = '';
+
+  if (phase === 'countdown') {
+    title = String(Math.max(1, Math.ceil(world.phaseTimer)));
+    sub = 'まもなく開始';
+  } else if (phase === 'halftime') {
+    title = 'ハーフタイム';
+    sub = `コートチェンジ ・ ${Math.ceil(world.phaseTimer)}`;
+  } else {
+    const w = winner(world);
+    title = w === null ? 'DRAW' : w === localTeam ? 'WIN' : 'LOSE';
+    if (localTeam === null) title = w === null ? 'DRAW' : `TEAM ${w === 0 ? 'BLUE' : 'RED'}`;
+    sub = `${world.score[0]} − ${world.score[1]} ・ まもなく次の試合`;
+  }
+
+  bannerTitle.textContent = title;
+  bannerSub.textContent = sub;
+  bannerEl.classList.add('show');
+}
+
+let accumulatedFps = 60;
+let lastTime = performance.now();
+
 function frame(now: number): void {
   const frameDt = Math.min(0.25, (now - lastTime) / 1000);
   lastTime = now;
-  fps += (1 / Math.max(frameDt, 1e-4) - fps) * 0.1;
+  accumulatedFps += (1 / Math.max(frameDt, 1e-4) - accumulatedFps) * 0.1;
 
   renderer.resize();
 
-  if (input.consumeKey('KeyR')) {
-    resetPositions(world);
-    peakBallSpeed = 0;
+  // 一度も繋がらないまま切れたらオフラインへ落とす。
+  if (net && (net.status === 'closed' || net.status === 'error') && net.welcome === null) {
+    net.close();
+    net = null;
+    startLocal();
   }
 
-  accumulator += frameDt;
-  // 一度に処理するティック数に上限を設ける。タブ復帰時の暴走を防ぐ。
-  let ticks = 0;
-  while (accumulator >= C.DT && ticks < 8) {
-    accumulator -= C.DT;
-    ticks++;
+  if (input.consumeKey('KeyR')) game.reset();
+  if (input.consumeKey('KeyG')) game.requestGoalkeeper();
 
-    const local = world.players.find((p) => p.id === LOCAL_ID)!;
-    const screen = renderer.toScreen(local.x, local.y);
-    const sampled = input.sample(screen);
-    lastInput = sampled;
+  game.update(frameDt);
 
-    const events = step(world, new Map([[LOCAL_ID, sampled]]));
-
-    if (events.goal !== null) {
-      showFlash('GOAL', events.goal === 0 ? '#4da3ff' : '#ff6b4d');
-      peakBallSpeed = 0;
-    }
-    for (const k of events.kicks) peakBallSpeed = k.speed;
-  }
-  // 積み残しが大きいときは捨てる（デバッガで止めた後などの巻き戻り防止）。
-  if (accumulator > C.DT * 8) accumulator = 0;
-
-  const local = world.players.find((p) => p.id === LOCAL_ID)!;
+  const world = game.world;
+  const me = world.players.find((p) => p.id === game.localId);
+  const focus = me ?? { x: world.ball.x, y: world.ball.y };
   renderer.updateCamera(
-    { x: (local.x + world.ball.x) / 2, y: (local.y + world.ball.y) / 2 },
+    { x: (focus.x + world.ball.x) / 2, y: (focus.y + world.ball.y) / 2 },
     frameDt,
   );
   renderer.draw(
     world,
-    LOCAL_ID,
-    { x: lastInput?.aimX ?? 1, y: lastInput?.aimY ?? 0 },
+    game.localId,
+    game.aimDir,
+    game.power,
     input.stickView(),
     input.aimView(),
     input.touchMode,
@@ -109,23 +204,31 @@ function frame(now: number): void {
 
   scoreHome.textContent = String(world.score[0]);
   scoreAway.textContent = String(world.score[1]);
+  clockEl.textContent = clockText(world);
+  updateBanner(world, me?.team ?? null);
 
-  const chargeRatio = Math.min(1, local.charge / C.CHARGE_TIME_MAX);
-  powerFill.style.width = `${chargeRatio * 100}%`;
-  powerFill.classList.toggle('max', chargeRatio >= 1);
+  // ゲージは「チャージ量」ではなく「実際に飛ぶ球の強さ」を出す。
+  // 傾け度で弱めた場合もそのまま見えるようにするため。
+  const speed = me ? kickSpeed(me.charge, game.power) : C.KICK_SPEED_MIN;
+  const ratio = (speed - C.KICK_SPEED_MIN) / (C.KICK_SPEED_MAX - C.KICK_SPEED_MIN);
+  powerFill.style.width = `${ratio * 100}%`;
+  powerFill.classList.toggle('max', ratio >= 0.999);
 
-  const ballSpeed = Math.hypot(world.ball.vx, world.ball.vy);
-  debugEl.textContent = [
-    `fps    ${fps.toFixed(0)}`,
-    `tick   ${world.tick}`,
-    `ball   ${ballSpeed.toFixed(1)} m/s`,
-    `kick   ${peakBallSpeed.toFixed(1)} m/s`,
-    `player ${Math.hypot(local.vx, local.vy).toFixed(1)} m/s`,
-  ].join('\n');
+  gkBtn.classList.toggle('active', me?.isGk === true);
+  gkBtn.textContent = me?.isGk ? 'キーパー中' : 'キーパーになる';
+  inviteBtn.style.display = game.lobby ? '' : 'none';
+  resetBtn.style.display = net ? 'none' : '';
+
+  const lobby = game.lobby;
+  statusEl.textContent = lobby
+    ? `${game.statusText()} ・ パーティ ${lobby.partyCode}（${lobby.partySize}人）`
+    : game.statusText();
+
+  debugEl.textContent = [`fps    ${accumulatedFps.toFixed(0)}`, ...game.debugLines()].join('\n');
 
   hintEl.textContent = input.touchMode
-    ? '左半分: 移動（浮動スティック）\n右半分: 長押しでチャージ → 指の向きへキック'
-    : 'WASD / 矢印: 移動\nマウス長押し: チャージ → カーソル方向へキック\nR: リセット';
+    ? '左半分: 移動（浮動スティック）\n右半分: 長押しでチャージ → 指の向きへキック\n倒し量が強さ。チャージ中は足が遅くなる'
+    : 'WASD / 矢印: 移動\nマウス長押し: チャージ → カーソル方向へキック\nG: キーパー交代 ／ R: リセット';
 
   requestAnimationFrame(frame);
 }

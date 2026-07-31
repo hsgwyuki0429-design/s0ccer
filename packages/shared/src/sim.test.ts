@@ -13,8 +13,19 @@ import { emptyInput, type PlayerInput, type World } from './types.ts';
  *   - キックの再現性（「同じ操作なら同じ球」というゲームの約束）
  */
 
+/**
+ * 物理のテストは常にプレー中の状態から始める。
+ * createWorld() はカウントダウンから始まり、その間は入力を受け付けない。
+ */
+function beginPlay(w: World): World {
+  w.phase = 'playing';
+  w.phaseTimer = 0;
+  w.clock = w.config.halfSeconds;
+  return w;
+}
+
 function worldWithPlayer(x: number, y: number, ballX: number, ballY: number): World {
-  const w = createWorld();
+  const w = beginPlay(createWorld());
   const p = createPlayer('p1', 0);
   p.x = x;
   p.y = y;
@@ -83,6 +94,66 @@ test('チャージ量に応じてキック速度が単調に増える', () => {
   const full = measure(40);
   assert.ok(short < mid, `${short} < ${mid}`);
   assert.ok(mid < full, `${mid} < ${full}`);
+});
+
+test('チャージ中は足が遅くなり、離すと元の速度に戻る', () => {
+  const measureTopSpeed = (input: Partial<PlayerInput>): number => {
+    const w = worldWithPlayer(-20, 10, 30, 30);
+    run(w, 200, { moveX: 1, moveY: 0, ...input });
+    return Math.hypot(w.players[0].vx, w.players[0].vy);
+  };
+
+  const free = measureTopSpeed({});
+  const charging = measureTopSpeed({ kick: true, aimX: 1, aimY: 0 });
+
+  assert.ok(free > C.PLAYER_MAX_SPEED - 1e-6, `free=${free}`);
+  // フルチャージぶんきっちり落ちる。
+  const expected = C.PLAYER_MAX_SPEED * (1 - C.CHARGE_SPEED_PENALTY);
+  assert.ok(Math.abs(charging - expected) < 0.05, `charging=${charging} expected=${expected}`);
+});
+
+test('減速はチャージ量に比例する（軽いパスではほとんど落ちない）', () => {
+  const w = worldWithPlayer(-20, 10, 30, 30);
+  // まず最高速まで走ってからチャージし始める。
+  run(w, 120, { moveX: 1, moveY: 0 });
+  run(w, 3, { moveX: 1, moveY: 0, kick: true, aimX: 1, aimY: 0 });
+  const barelyCharged = Math.hypot(w.players[0].vx, w.players[0].vy);
+
+  run(w, 120, { moveX: 1, moveY: 0, kick: true, aimX: 1, aimY: 0 });
+  const fullyCharged = Math.hypot(w.players[0].vx, w.players[0].vy);
+
+  assert.ok(barelyCharged > C.PLAYER_MAX_SPEED * 0.95, `barely=${barelyCharged}`);
+  assert.ok(fullyCharged < barelyCharged, `${fullyCharged} < ${barelyCharged}`);
+});
+
+test('傾け度を下げるとフルチャージでも弱い球が飛ぶ', () => {
+  const measure = (power: number): number => {
+    const w = worldWithPlayer(0, 0, 0.8, 0);
+    run(w, 40, { kick: true, aimX: 1, aimY: 0, power });
+    step(w, new Map([['p1', { ...emptyInput(0), kick: false, aimX: 1, aimY: 0, power }]]));
+    return Math.hypot(w.ball.vx, w.ball.vy);
+  };
+
+  const soft = measure(0.15);
+  const half = measure(0.5);
+  const full = measure(1);
+
+  assert.ok(soft < half, `${soft} < ${half}`);
+  assert.ok(half < full, `${half} < ${full}`);
+  // 倍率を絞っても下限（＝軽いタップ相当）は下回らない。
+  assert.ok(soft >= C.KICK_SPEED_MIN * 0.95, `soft=${soft}`);
+  // 倍率1のときは従来どおり最大まで出る。
+  assert.ok(full > C.KICK_SPEED_MAX * 0.95, `full=${full}`);
+});
+
+test('同じチャージ量・同じ傾け度なら初速が完全に一致する', () => {
+  const measure = (): number => {
+    const w = worldWithPlayer(0, 0, 0.8, 0);
+    run(w, 25, { kick: true, aimX: 1, aimY: 0, power: 0.37 });
+    step(w, new Map([['p1', { ...emptyInput(0), kick: false, aimX: 1, aimY: 0, power: 0.37 }]]));
+    return Math.hypot(w.ball.vx, w.ball.vy);
+  };
+  assert.equal(measure(), measure());
 });
 
 test('ゴールエリアにプレイヤーは侵入できない', () => {
@@ -189,7 +260,7 @@ test('ドリブルでボールが進行方向へ運ばれる', () => {
 });
 
 test('同一ティックに2人が離したらボールに近いほうが勝つ', () => {
-  const w = createWorld();
+  const w = beginPlay(createWorld());
   const near = createPlayer('near', 0);
   near.x = -0.7;
   near.y = 0;

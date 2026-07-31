@@ -1,0 +1,20 @@
+# Render へのデプロイ設定。
+#
+# GitHub リポジトリを繋いで Blueprint として読み込ませると、この定義どおりに
+# 作られる。ブラウザだけで完結するので、CLI を入れたくない場合はこちら。
+#
+# 注意: 無料プランはアクセスが無いとインスタンスが停止し、次のアクセスで
+# 起動し直すまで数十秒かかる。遊ぶ直前に一度 /health を開いて起こしておくか、
+# 有料プランにする。
+
+services:
+  - type: web
+    name: s0ccer-server
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: singapore # Render に日本リージョンはない。国内からは最寄り
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 8787

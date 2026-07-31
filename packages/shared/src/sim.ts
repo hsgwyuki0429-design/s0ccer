@@ -1,6 +1,15 @@
 import * as C from './constants.ts';
+import { acceptsInput, advanceMatch, defendingSide, otherTeam, teamDefending } from './match.ts';
 import { clamp, clampLength, normalize } from './math.ts';
-import type { BallState, PlayerInput, PlayerState, StepEvents, TeamId, World } from './types.ts';
+import {
+  defaultMatchConfig,
+  type BallState,
+  type PlayerInput,
+  type PlayerState,
+  type StepEvents,
+  type TeamId,
+  type World,
+} from './types.ts';
 
 /**
  * 決定論シミュレーション。
@@ -14,17 +23,39 @@ import type { BallState, PlayerInput, PlayerState, StepEvents, TeamId, World } f
 /** ゴールポストの半径。当たり判定にのみ使う。 */
 const POST_RADIUS = 0.08;
 
-/** チーム 0 は左ゴール（x = -HALF_W）を守り、右ゴールを攻める。 */
-export function attackingGoalX(team: TeamId): number {
-  return team === 0 ? C.HALF_W : -C.HALF_W;
+/**
+ * キックの初速。チャージ量と強さの倍率の積で決まる。
+ *
+ * 乱数は入らない。同じチャージ量・同じ倍率なら必ず同じ初速になる。
+ * UI もこの関数で表示するので、画面のゲージと実際の球は常に一致する。
+ */
+export function kickSpeed(charge: number, power: number): number {
+  const t = clamp(charge / C.CHARGE_TIME_MAX, 0, 1) * clamp(power, 0, 1);
+  return C.KICK_SPEED_MIN + (C.KICK_SPEED_MAX - C.KICK_SPEED_MIN) * t;
+}
+
+/** チャージ中の最大速度。チャージ量に比例して落ちる。 */
+export function chargedMaxSpeed(charge: number): number {
+  const t = clamp(charge / C.CHARGE_TIME_MAX, 0, 1);
+  return C.PLAYER_MAX_SPEED * (1 - C.CHARGE_SPEED_PENALTY * t);
 }
 
 export function createWorld(): World {
+  const config = defaultMatchConfig();
   return {
     tick: 0,
     players: [],
     ball: { x: 0, y: 0, vx: 0, vy: 0 },
     score: [0, 0],
+    config,
+    phase: 'countdown',
+    phaseTimer: C.COUNTDOWN_SECONDS,
+    half: 1,
+    clock: config.mode === 'time' ? config.halfSeconds : 0,
+    sidesSwapped: false,
+    lastTouch: null,
+    restartTeam: null,
+    restartTimer: 0,
   };
 }
 
@@ -39,10 +70,14 @@ const SPAWN_DEPTH = 8;
  * 人数が 1〜3 のどれでも対称になることが重要。人数によって片側に寄ると、
  * 1v1 のときにボールから遠い選手が生まれてしまう。
  */
-function spawnPosition(team: TeamId, index: number, teamSize: number): { x: number; y: number } {
-  const side = team === 0 ? -1 : 1;
+function spawnPosition(
+  team: TeamId,
+  index: number,
+  teamSize: number,
+  sidesSwapped: boolean,
+): { x: number; y: number } {
   return {
-    x: side * SPAWN_DEPTH,
+    x: defendingSide(team, sidesSwapped) * SPAWN_DEPTH,
     y: (index - (teamSize - 1) / 2) * SPAWN_SPACING,
   };
 }
@@ -51,7 +86,7 @@ function spawnPosition(team: TeamId, index: number, teamSize: number): { x: numb
  * プレイヤーを生成する。位置は仮置きで、実際のキックオフ配置は
  * 全員を追加したあとに resetPositions() が決める（人数に依存するため）。
  */
-export function createPlayer(id: string, team: TeamId): PlayerState {
+export function createPlayer(id: string, team: TeamId, isAi = false): PlayerState {
   const side = team === 0 ? -1 : 1;
   return {
     id,
@@ -65,7 +100,32 @@ export function createPlayer(id: string, team: TeamId): PlayerState {
     charge: 0,
     kickHeld: false,
     kickCooldown: 0,
+    isGk: false,
+    isAi,
   };
+}
+
+/**
+ * 各チームにちょうど1人の GK がいる状態にする。足りなければ抽選で選ぶ。
+ *
+ * **抽選は step() の外でしか行わない。** step() に乱数が入ると決定論が壊れ、
+ * クライアント予測がサーバーと一致しなくなる。呼ぶのはサーバーだけで、
+ * 結果はスナップショットでクライアントに伝わる。
+ *
+ * @param pick 0以上 n 未満の整数を返す関数。テストのために外から渡す。
+ */
+export function ensureGoalkeepers(
+  world: World,
+  pick: (n: number) => number = (n) => Math.floor(Math.random() * n),
+): void {
+  for (const team of [0, 1] as const) {
+    const members = world.players.filter((p) => p.team === team);
+    if (members.length === 0) continue;
+    if (members.filter((p) => p.isGk).length === 1) continue;
+
+    for (const m of members) m.isGk = false;
+    members[clamp(pick(members.length), 0, members.length - 1)].isGk = true;
+  }
 }
 
 /** キックオフ配置に戻す。得点後とハーフタイムに呼ぶ。 */
@@ -81,8 +141,8 @@ export function resetPositions(world: World): void {
   const seen: Record<number, number> = { 0: 0, 1: 0 };
   for (const p of world.players) {
     const index = seen[p.team]++;
-    const side = p.team === 0 ? -1 : 1;
-    const pos = spawnPosition(p.team, index, teamSize[p.team]);
+    const side = defendingSide(p.team, world.sidesSwapped);
+    const pos = spawnPosition(p.team, index, teamSize[p.team], world.sidesSwapped);
     p.x = pos.x;
     p.y = pos.y;
     p.vx = 0;
@@ -97,10 +157,11 @@ export function resetPositions(world: World): void {
 
 export function cloneWorld(world: World): World {
   return {
-    tick: world.tick,
+    ...world,
     players: world.players.map((p) => ({ ...p })),
     ball: { ...world.ball },
     score: [world.score[0], world.score[1]],
+    config: { ...world.config },
   };
 }
 
@@ -113,17 +174,41 @@ function dist(ax: number, ay: number, bx: number, by: number): number {
  *
  * @param inputs プレイヤー id -> 入力。欠けているプレイヤーは「入力なし」として扱う。
  */
-export function step(world: World, inputs: Map<string, PlayerInput>, dt: number = C.DT): StepEvents {
-  const events: StepEvents = { goal: null, kicks: [], wallHit: false };
+export function step(world: World, rawInputs: Map<string, PlayerInput>, dt: number = C.DT): StepEvents {
+  const events: StepEvents = {
+    goal: null,
+    kicks: [],
+    wallHit: false,
+    outOfPlay: false,
+    phaseChanged: null,
+  };
   const ball = world.ball;
+
+  // --- 0. GK の交代 -------------------------------------------------------
+  // ボタンを押した本人が GK になり、それまでの GK は通常の選手に戻る。
+  // 抽選ではないので決定論が保たれ、クライアント予測と食い違わない。
+  // 同一ティックに同じチームの複数人が押した場合は、後ろの選手が勝つ（安定順）。
+  for (const p of world.players) {
+    if (!rawInputs.get(p.id)?.claimGk || p.isGk) continue;
+    for (const other of world.players) {
+      if (other.team === p.team) other.isGk = false;
+    }
+    p.isGk = true;
+  }
+
+  // カウントダウン中・ハーフタイム中・試合終了後は操作を受け付けない。
+  // GK の交代だけは上で処理済みなので、いつでも可能。
+  const inputs = acceptsInput(world.phase) ? rawInputs : new Map<string, PlayerInput>();
 
   // --- 1. プレイヤーの移動 ------------------------------------------------
   for (const p of world.players) {
     const input = inputs.get(p.id);
     const move = input ? clampLength({ x: input.moveX, y: input.moveY }, 1) : { x: 0, y: 0 };
 
-    const targetVx = move.x * C.PLAYER_MAX_SPEED;
-    const targetVy = move.y * C.PLAYER_MAX_SPEED;
+    // チャージ中は足が遅くなる。強い球にはそれだけの拘束を伴わせる。
+    const maxSpeed = chargedMaxSpeed(p.charge);
+    const targetVx = move.x * maxSpeed;
+    const targetVy = move.y * maxSpeed;
     const targetSpeed = Math.hypot(targetVx, targetVy);
     const currentSpeed = Math.hypot(p.vx, p.vy);
     // 加速中か減速中かでレートを変える。減速を速くすると切り返しがキビキビする。
@@ -178,8 +263,12 @@ export function step(world: World, inputs: Map<string, PlayerInput>, dt: number 
 
   // --- 3. ゴールエリアとピッチ境界 ----------------------------------------
   for (const p of world.players) {
-    constrainPlayer(p);
+    constrainPlayer(p, world.sidesSwapped);
   }
+
+  // ラインを割った直後は、割った側のチームがボールに触れない。
+  const lockedTeam: TeamId | null =
+    world.restartTeam !== null && world.restartTimer > 0 ? otherTeam(world.restartTeam) : null;
 
   // --- 4. キック ----------------------------------------------------------
   // 「離した瞬間」に発射する。同一ティックに複数人が離した場合は
@@ -190,6 +279,7 @@ export function step(world: World, inputs: Map<string, PlayerInput>, dt: number 
     aimX: number;
     aimY: number;
     charge: number;
+    power: number;
   }
   const candidates: KickCandidate[] = [];
 
@@ -208,6 +298,7 @@ export function step(world: World, inputs: Map<string, PlayerInput>, dt: number 
     const chargeAmount = p.charge;
     p.charge = 0;
     if (p.kickCooldown > 0) continue;
+    if (p.team === lockedTeam) continue;
 
     const d = dist(p.x, p.y, ball.x, ball.y);
     if (d > C.CONTROL_RADIUS) continue;
@@ -217,19 +308,27 @@ export function step(world: World, inputs: Map<string, PlayerInput>, dt: number 
     if (aim.x === 0 && aim.y === 0) aim = { x: p.facingX, y: p.facingY };
     if (aim.x === 0 && aim.y === 0) continue;
 
-    candidates.push({ p, d, aimX: aim.x, aimY: aim.y, charge: chargeAmount });
+    candidates.push({
+      p,
+      d,
+      aimX: aim.x,
+      aimY: aim.y,
+      charge: chargeAmount,
+      // 離した瞬間の傾け度で強さが決まる。狙いと同じく、指を離した時点の値。
+      power: input?.power ?? 1,
+    });
   }
 
   if (candidates.length > 0) {
     candidates.sort((a, b) => a.d - b.d);
     const winner = candidates[0];
-    const t = clamp(winner.charge / C.CHARGE_TIME_MAX, 0, 1);
-    const speed = C.KICK_SPEED_MIN + (C.KICK_SPEED_MAX - C.KICK_SPEED_MIN) * t;
+    const speed = kickSpeed(winner.charge, winner.power);
 
     // 加算ではなく代入。同じチャージ・同じ方向なら必ず同じ球が飛ぶことを保証する。
     ball.vx = winner.aimX * speed;
     ball.vy = winner.aimY * speed;
     winner.p.kickCooldown = C.KICK_COOLDOWN;
+    world.lastTouch = winner.p.team;
     events.kicks.push({ playerId: winner.p.id, speed });
   }
 
@@ -239,6 +338,7 @@ export function step(world: World, inputs: Map<string, PlayerInput>, dt: number 
   let dribblerDist = Infinity;
   for (const p of world.players) {
     if (p.kickCooldown > 0) continue;
+    if (p.team === lockedTeam) continue;
     if (Math.hypot(p.vx, p.vy) < C.DRIBBLE_MIN_SPEED) continue;
     const d = dist(p.x, p.y, ball.x, ball.y);
     if (d <= C.CONTROL_RADIUS && d < dribblerDist) {
@@ -247,6 +347,7 @@ export function step(world: World, inputs: Map<string, PlayerInput>, dt: number 
     }
   }
   if (dribbler) {
+    world.lastTouch = dribbler.team;
     const dir = normalize({ x: dribbler.vx, y: dribbler.vy });
     const targetX = dribbler.x + dir.x * C.DRIBBLE_DISTANCE;
     const targetY = dribbler.y + dir.y * C.DRIBBLE_DISTANCE;
@@ -293,6 +394,7 @@ export function step(world: World, inputs: Map<string, PlayerInput>, dt: number 
 
     ball.x = p.x + nx * contact;
     ball.y = p.y + ny * contact;
+    world.lastTouch = p.team;
 
     // コントロールしている本人は反発ゼロ＝トラップ。ボールを殺してから
     // ドリブルで運ぶ。他人の体に当たった場合だけ弾く。
@@ -328,54 +430,47 @@ export function step(world: World, inputs: Map<string, PlayerInput>, dt: number 
     }
   }
 
-  // --- 9. ゴール判定とサイドライン ----------------------------------------
-  // Phase 1 ではラインを割ったボールは跳ね返す。本来のルールでは相手ボールで
-  // リスタート（design.md 参照）。Phase 5 で差し替える。
+  // --- 9. ゴール判定とライン ----------------------------------------------
   // ゴールマウスの内側には壁を置かない。ここに壁があるとボールがゴールラインへ
   // 到達する前に跳ね返され、永遠に得点にならない。
   const inGoalMouth = Math.abs(ball.y) <= C.GOAL_WIDTH / 2;
 
-  if (inGoalMouth && ball.x > C.HALF_W) {
-    world.score[0]++;
-    events.goal = 0;
-  } else if (inGoalMouth && ball.x < -C.HALF_W) {
-    world.score[1]++;
-    events.goal = 1;
-  } else if (!inGoalMouth) {
-    // 縦のライン（ゴールライン）
-    if (ball.x > C.HALF_W - C.BALL_RADIUS) {
-      ball.x = C.HALF_W - C.BALL_RADIUS;
-      if (ball.vx > 0) {
-        ball.vx = -ball.vx * C.BALL_RESTITUTION;
-        events.wallHit = true;
-      }
-    } else if (ball.x < -C.HALF_W + C.BALL_RADIUS) {
-      ball.x = -C.HALF_W + C.BALL_RADIUS;
-      if (ball.vx < 0) {
-        ball.vx = -ball.vx * C.BALL_RESTITUTION;
-        events.wallHit = true;
-      }
+  if (inGoalMouth && Math.abs(ball.x) > C.HALF_W) {
+    // 割った側のゴールを守っているチームの失点。
+    const side: -1 | 1 = ball.x > 0 ? 1 : -1;
+    const scorer = otherTeam(teamDefending(side, world.sidesSwapped));
+    world.score[scorer]++;
+    events.goal = scorer;
+  } else {
+    // ラインを割ったら、割った側の相手ボールで再開する。
+    let out = false;
+    let restartX = ball.x;
+    let restartY = ball.y;
+
+    if (!inGoalMouth && Math.abs(ball.x) > C.HALF_W - C.BALL_RADIUS) {
+      out = true;
+      restartX = Math.sign(ball.x) * (C.HALF_W - C.RESTART_INSET);
+      restartY = clamp(ball.y, -C.HALF_H + C.RESTART_INSET, C.HALF_H - C.RESTART_INSET);
+    } else if (Math.abs(ball.y) > C.HALF_H - C.BALL_RADIUS) {
+      out = true;
+      restartX = clamp(ball.x, -C.HALF_W + C.RESTART_INSET, C.HALF_W - C.RESTART_INSET);
+      restartY = Math.sign(ball.y) * (C.HALF_H - C.RESTART_INSET);
+    }
+
+    if (out) {
+      ball.x = restartX;
+      ball.y = restartY;
+      ball.vx = 0;
+      ball.vy = 0;
+      // 最後に触った側の相手ボール。誰も触れていなければ触れる制限を設けない。
+      world.restartTeam = world.lastTouch === null ? null : otherTeam(world.lastTouch);
+      world.restartTimer = world.restartTeam === null ? 0 : C.RESTART_LOCK_SECONDS;
+      events.outOfPlay = true;
     }
   }
 
-  // 横のライン（サイドライン）はゴールマウスと無関係に常に有効。
-  if (ball.y > C.HALF_H - C.BALL_RADIUS) {
-    ball.y = C.HALF_H - C.BALL_RADIUS;
-    if (ball.vy > 0) {
-      ball.vy = -ball.vy * C.BALL_RESTITUTION;
-      events.wallHit = true;
-    }
-  } else if (ball.y < -C.HALF_H + C.BALL_RADIUS) {
-    ball.y = -C.HALF_H + C.BALL_RADIUS;
-    if (ball.vy < 0) {
-      ball.vy = -ball.vy * C.BALL_RESTITUTION;
-      events.wallHit = true;
-    }
-  }
-
-  if (events.goal !== null) {
-    resetPositions(world);
-  }
+  // --- 10. 試合進行 --------------------------------------------------------
+  advanceMatch(world, dt, events, resetPositions);
 
   world.tick++;
   return events;
@@ -386,9 +481,13 @@ export function step(world: World, inputs: Map<string, PlayerInput>, dt: number 
  *
  * ワープさせず、境界に沿って滑らせる。壁沿いの移動が引っかからないようにするため。
  */
-function constrainPlayer(p: PlayerState): void {
-  // ゴールエリア（半円）。GK を置かない代わりの侵入禁止ゾーン。
-  for (const goalX of [-C.HALF_W, C.HALF_W]) {
+function constrainPlayer(p: PlayerState, sidesSwapped: boolean): void {
+  const ownSide = defendingSide(p.team, sidesSwapped);
+
+  // ゴールエリア（半円）。GK だけが自陣のエリアに入れる。出るのも自由。
+  for (const side of [-1, 1] as const) {
+    if (p.isGk && side === ownSide) continue;
+    const goalX = side * C.HALF_W;
     const dx = p.x - goalX;
     const dy = p.y - 0;
     const d = Math.hypot(dx, dy);
